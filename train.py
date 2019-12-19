@@ -245,7 +245,7 @@ for epoch in range(num_epochs):
         if batch_num % (log_interval*40) == 0 and batch_num != 0:
             # Generate images(videos)
             png_image_tensor = torch.Tensor(make_save_image(videos_fake))
-            save_image(png_image_tensor, os.path.join('./tmp/epoch{}-batch{}_fakevideos.png'.format(epoch, batch_num)))
+            save_image(png_image_tensor, os.path.join('./gen_images/epoch{}-batch{}_fakevideos.png'.format(epoch, batch_num)))
             
     # Epoch-wise Loss
     GE_losses_per_epoch.append(sum(GE_losses_per_batch) / len(GE_losses_per_batch))
