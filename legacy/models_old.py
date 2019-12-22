@@ -1,12 +1,13 @@
 import os
 import numpy as np
 import torch
-from torch import nn, optim
-from torch.utils.data import Dataset, DataLoader, TensorDataset
+from torch import nn
 
 def to_cuda(x):
-    device = torch.device("cuda" if torch.cuda.is_available() else "cpu")
-    return x.to(device)
+    if torch.cuda.is_available():
+        return x.cuda()
+    else:
+        return x
 
 def weights_init_normal(m):
     classname = m.__class__.__name__
@@ -35,9 +36,8 @@ class Noise(nn.Module):
 class Flatten(nn.Module):
     def forward(self, x):
         return x.view(x.size(0), -1)
-
-
-
+    
+    
 class ImageEncoder(nn.Module):
     """
     Z'm = E(X)
@@ -56,44 +56,30 @@ class ImageEncoder(nn.Module):
         self.dim_z_motion = dim_z_motion
         self.use_noise = use_noise
         self.noise_sigma = noise_sigma
-        
+
         self.infer_image = nn.Sequential(
             Noise(self.use_noise, sigma=self.noise_sigma),
-            nn.Conv2d(self.n_channels, ndf, kernel_size=4, stride=1, padding=1, bias=False),
-            nn.ReLU(True),
+            nn.Conv2d(self.n_channels, ndf, 4, 2, 1, bias=False),
+            nn.LeakyReLU(0.2, inplace=True),
 
             Noise(self.use_noise, sigma=self.noise_sigma),
-            nn.Conv2d(ndf, ndf * 2, kernel_size=4, stride=2, padding=1, bias=False),
+            nn.Conv2d(ndf, ndf * 2, 4, 2, 1, bias=False),
             nn.BatchNorm2d(ndf * 2),
-            nn.ReLU(True),
+            nn.LeakyReLU(0.2, inplace=True),
 
             Noise(self.use_noise, sigma=self.noise_sigma),
-            nn.Conv2d(ndf * 2, ndf * 4, kernel_size=4, stride=1, padding=1, bias=False),
+            nn.Conv2d(ndf * 2, ndf * 4, 4, 2, 1, bias=False),
             nn.BatchNorm2d(ndf * 4),
-            nn.ReLU(True),
-            
-            Noise(self.use_noise, sigma=self.noise_sigma),
-            nn.Conv2d(ndf * 4, ndf * 8, kernel_size=4, stride=2, padding=1, bias=False),
-            nn.BatchNorm2d(ndf * 8),
-            nn.ReLU(True),
-            
-            Noise(self.use_noise, sigma=self.noise_sigma),
-            nn.Conv2d(ndf * 8, ndf * 16, kernel_size=4, stride=1, padding=1, bias=False),
-            nn.BatchNorm2d(ndf * 16),
-            nn.ReLU(True),
+            nn.LeakyReLU(0.2, inplace=True),
 
             Noise(self.use_noise, sigma=self.noise_sigma),
-            nn.Conv2d(ndf * 16, ndf * 16, kernel_size=4, stride=1, padding=1, bias=False),
-            nn.BatchNorm2d(ndf * 16),
-            nn.ReLU(True),
-            
-            nn.Conv2d(ndf * 16, 1, kernel_size=1, stride=1, padding=1, bias=True),
+            nn.Conv2d(ndf * 4, 1, 4, 2, 1, bias=False),
             nn.BatchNorm2d(1),
-            nn.ReLU(True),
-                         
+            nn.LeakyReLU(0.2, inplace=True),
+            
             Flatten(),
-            nn.Linear(1*15*15, self.dim_z_motion),
-            # nn.Tanh(),
+            nn.Linear(16, self.dim_z_motion),
+             # nn.Tanh(),
         )
 
     def forward(self, x):
@@ -111,9 +97,8 @@ class ImageEncoder(nn.Module):
         zm = to_cuda(zm)
         # zm: 3D-Tensor (batch_size, video_len, dim_z_motion)
         return zm
-
-
-
+    
+    
 class VideoGenerator(nn.Module):
     """
     X' = G(Zc, Zm)
@@ -134,62 +119,55 @@ class VideoGenerator(nn.Module):
         self.dim_z_content = dim_z_content
         self.dim_z_motion = dim_z_motion
         self.dim_z = dim_z_motion + dim_z_content
-        self.dim_e = dim_z_motion
         self.video_length = video_length
         
         # GRU
-        self.recurrent = nn.GRUCell(self.dim_e, self.dim_z_motion)
-        self.gru_linear = nn.Linear(self.dim_z_motion, self.dim_e)
-        self.gru_bn = nn.BatchNorm1d(self.dim_z_motion)
+        self.recurrent = nn.GRUCell(dim_z_motion, dim_z_motion)
 
         self.main = nn.Sequential(
             Noise(use_noise, sigma=noise_sigma),
             nn.ConvTranspose2d(self.dim_z, ngf * 8, 4, 1, 0, bias=False),
             nn.BatchNorm2d(ngf * 8),
-            nn.ReLU(True),
+            nn.LeakyReLU(0.2, inplace=True),
 
             Noise(use_noise, sigma=noise_sigma),
             nn.ConvTranspose2d(ngf * 8, ngf * 4, 4, 2, 1, bias=False),
             nn.BatchNorm2d(ngf * 4),
-            nn.ReLU(True),
+            nn.LeakyReLU(0.2, inplace=True),
 
             Noise(use_noise, sigma=noise_sigma),
             nn.ConvTranspose2d(ngf * 4, ngf * 2, 4, 2, 1, bias=False),
             nn.BatchNorm2d(ngf * 2),
-            nn.ReLU(True),
+            nn.LeakyReLU(0.2, inplace=True),
 
             Noise(use_noise, sigma=noise_sigma),
             nn.ConvTranspose2d(ngf * 2, ngf, 4, 2, 1, bias=False),
             nn.BatchNorm2d(ngf),
-            nn.ReLU(True),
+            nn.LeakyReLU(0.2, inplace=True),
 
             nn.ConvTranspose2d(ngf, self.n_channels, 4, 2, 1, bias=False),
             nn.Tanh()
         )
-        
+
     def sample_z_motion(self, num_samples, video_len=None):
         video_len = video_len if video_len is not None else self.video_length
+        h_t = [self.get_gru_initial_state(num_samples)]
+
+        for frame_num in range(video_len):
+            e_t = self.get_iteration_noise(num_samples)
+            h_t.append(self.recurrent(e_t, h_t[-1]))
         
-        e_t = self.get_iteration_noise(num_samples)
-        h_t = self.get_gru_initial_state(num_samples)
-        
-        outputs=[]
-        for i in range(video_len):            
-            h_t = self.recurrent(e_t, h_t)
-            e_t = self.gru_linear(h_t)
-            outputs.append(h_t)
-            
-        outputs = [self.gru_bn(h_t) for h_t in outputs]
-        outputs = torch.stack(outputs) # outputs: (video_len, num_samples, dim_z_motion)
-        outputs = outputs.permute(1, 0, 2) # outputs: (num_samples, video_len, dim_z_motion)
-        z_m = to_cuda(outputs) 
+        # make z_m
+        z_m_t = [h_k.view(-1, 1, self.dim_z_motion) for h_k in h_t]
+        z_m = torch.cat(z_m_t[1:], dim=1).view(-1, video_len, self.dim_z_motion)
+        z_m = to_cuda(z_m) # z_m: (num_samples, video_len, dim_z_motion)
         return z_m
 
     def sample_z_content(self, num_samples, video_len=None):
         video_len = video_len if video_len is not None else self.video_length
         content = np.random.normal(0, 1, (num_samples, self.dim_z_content)).astype(np.float32) # (10,1)
         content = np.tile(content, (video_len, 1, 1)) # (20, 10, 1)
-        content = np.transpose(content, (1, 0, 2))                
+        content = np.transpose(content, (1,0,2))                
         z_c = torch.FloatTensor(content)
         z_c = to_cuda(z_c) # z_c: (num_samples, video_len, dim_z_content)
         return z_c
@@ -236,13 +214,12 @@ class VideoGenerator(nn.Module):
         return images_fake, videos_fake, z, z_c, z_m
 
     def get_gru_initial_state(self, num_samples):
-        # Random values following standard gaussi
-        return to_cuda(torch.zeros(num_samples, self.dim_z_motion))
+        # Random values following standard gauss
+        return to_cuda(torch.FloatTensor(num_samples, self.dim_z_motion).normal_())
 
     def get_iteration_noise(self, num_samples):
         # Random values following standard gauss
-        return to_cuda(torch.FloatTensor(num_samples, self.dim_e).normal_())
-
+        return to_cuda(torch.FloatTensor(num_samples, self.dim_z_motion).normal_())
 
 
 class ImageDiscriminator(nn.Module):
@@ -293,24 +270,24 @@ class ImageDiscriminator(nn.Module):
         )
         
         self.infer_zm = nn.Sequential(
-            nn.Linear(self.dim_z_motion, 128),
-            nn.BatchNorm1d(128),
+            nn.Linear(self.dim_z_motion, 512),
+            nn.BatchNorm1d(512),
             nn.LeakyReLU(inplace=True),
             nn.Dropout(p=self.dropout),
 
-            nn.Linear(128, 128),
-            nn.BatchNorm1d(128),
+            nn.Linear(512, 512),
+            nn.BatchNorm1d(512),
             nn.LeakyReLU(inplace=True),
             nn.Dropout(p=self.dropout)
         )
 
         self.infer_joint = nn.Sequential(
-            nn.Linear(640, 640),
-            nn.BatchNorm1d(640),
+            nn.Linear(1024, 1024),
+            nn.BatchNorm1d(1024),
             nn.LeakyReLU(inplace=True),
             nn.Dropout(p=self.dropout),
 
-            nn.Linear(640, 1),
+            nn.Linear(1024, 1),
             nn.Sigmoid(),
         )
     
@@ -320,8 +297,8 @@ class ImageDiscriminator(nn.Module):
         zm: 2D-Tensor (num_images, dim_z_motion)
         """
         output_x = self.infer_x(x) # (num_images, 512)
-        output_zm = self.infer_zm(zm) # (num_images, 128)
-        output_x_zm = torch.cat([output_x, output_zm], dim=1) # (num_images, 128)
+        output_zm = self.infer_zm(zm) # (num_images, 512)
+        output_x_zm = torch.cat([output_x, output_zm], dim=1) # (num_images, 1024)
         output = self.infer_joint(output_x_zm)
         output = output.squeeze()
         output = to_cuda(output)
@@ -386,23 +363,23 @@ class VideoDiscriminator(nn.Module):
         )
         
         self.infer_zm = nn.Sequential(
-            nn.Linear(self.dim_z_motion * self.video_length, 128),
+            nn.Linear(self.dim_z_motion * self.video_length, 512),
             nn.LeakyReLU(inplace=True),
             nn.Dropout(p=self.dropout),
 
-            nn.Linear(128, 128),
-            nn.BatchNorm1d(128),
+            nn.Linear(512, 512),
+            nn.BatchNorm1d(512),
             nn.LeakyReLU(inplace=True),
             nn.Dropout(p=self.dropout)
         )
 
         self.infer_joint = nn.Sequential(
-            nn.Linear(640, 640),
-            nn.BatchNorm1d(640),
+            nn.Linear(1024, 1024),
+            nn.BatchNorm1d(1024),
             nn.LeakyReLU(inplace=True),
             nn.Dropout(p=self.dropout),
 
-            nn.Linear(640, 1),
+            nn.Linear(1024, 1),
             nn.Sigmoid(),
         )
 
@@ -414,7 +391,7 @@ class VideoDiscriminator(nn.Module):
         zm = zm.contiguous().view(zm.size(0), int(zm.size(1)*zm.size(2))) # zm: (batch_size, dim_z_motion*video_length)
         
         output_x = self.infer_x(x) # (batch_size, 512)
-        output_zm = self.infer_zm(zm) # (batch_size, 128)
+        output_zm = self.infer_zm(zm) # (batch_size, 512)
         
         output_x_zm = torch.cat([output_x, output_zm], dim=1)
         output = self.infer_joint(output_x_zm)

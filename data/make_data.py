@@ -46,6 +46,15 @@ def make_frame(digit_img, motion_label=0, frame_size=20, width=64, height=64):
 
 
 def main(frame_size=20):
+    # path settings
+    label_file_path = './labels.csv'
+    video_dir_path = './video'
+    if os.path.exists(label_file_path):
+        os.remove(label_file_path)
+        pathlib.Path(label_file_path).touch()
+    if not os.path.exists(video_dir_path):
+        os.mkdir(video_dir_path)
+
     # Load MNIST dataset
     (x_train, y_train), (x_test, y_test) = tf.keras.datasets.mnist.load_data()
 
@@ -69,4 +78,3 @@ def main(frame_size=20):
 
 if __name__ == '__main__':
     main()
-
