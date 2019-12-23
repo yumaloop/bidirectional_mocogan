@@ -9,7 +9,7 @@ from torchvision.utils import save_image
 from torchsummary import summary
 from tqdm import tqdm
 from utils import make_save_image
-from dataset import CustomMovingMNIST
+from custom_moving_mnist import CustomMovingMNIST
 from models import VideoGenerator, ImageDiscriminator, VideoDiscriminator, ImageEncoder, to_cuda, weights_init_normal, Noise
 
 # Clear GPU cache
@@ -17,12 +17,14 @@ torch.cuda.empty_cache()
 
 # Hyper params
 num_epochs = 1000
-batch_size = 50
+batch_size = 16
 num_samples = batch_size
 num_videos = batch_size
 num_images = batch_size * 3
 video_len = 20
 log_interval=10
+dim_zm = 16
+dim_zc = 64
 
 
 # Load dataset
@@ -32,10 +34,10 @@ data_num  = dataset.__len__()
 batch_num = data_loader.__len__()
 
 # Generator, Discriminator, Encoder
-netE  = to_cuda(ImageEncoder(n_channels=1, dim_z_motion=8))
-netG  = to_cuda(VideoGenerator(n_channels=1, dim_z_content=10, dim_z_motion=8))
-netDI = to_cuda(ImageDiscriminator(n_channels=1, dim_z_content=10, dim_z_motion=8, dropout=0.1, use_noise=True, noise_sigma=0.2))
-netDV = to_cuda(VideoDiscriminator(n_channels=1, dim_z_content=10, dim_z_motion=8, dropout=0.1, use_noise=True, noise_sigma=0.2))
+netE  = to_cuda(ImageEncoder(n_channels=1, dim_z_motion=dim_zm))
+netG  = to_cuda(VideoGenerator(n_channels=1, dim_z_content=dim_zc, dim_z_motion=dim_zm))
+netDI = to_cuda(ImageDiscriminator(n_channels=1, dim_z_content=dim_zc, dim_z_motion=dim_zm, dropout=0.1, use_noise=True, noise_sigma=0.2))
+netDV = to_cuda(VideoDiscriminator(n_channels=1, dim_z_content=dim_zc, dim_z_motion=dim_zm, dropout=0.1, use_noise=True, noise_sigma=0.2))
 
 # Summary
 # print(summary(netE, (1, 20, 64, 64)))
@@ -245,7 +247,7 @@ for epoch in range(num_epochs):
         if batch_num % (log_interval*40) == 0 and batch_num != 0:
             # Generate images(videos)
             png_image_tensor = torch.Tensor(make_save_image(videos_fake))
-            save_image(png_image_tensor, os.path.join('./gen_images/epoch{}-batch{}_fakevideos.png'.format(epoch, batch_num)))
+            save_image(png_image_tensor, os.path.join('./tmp/epoch{}-batch{}_fakevideos.png'.format(epoch, batch_num)))
             
     # Epoch-wise Loss
     GE_losses_per_epoch.append(sum(GE_losses_per_batch) / len(GE_losses_per_batch))
